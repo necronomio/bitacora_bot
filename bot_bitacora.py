@@ -5,13 +5,14 @@ import requests
 import json
 from datetime import datetime, timedelta
 import asyncio
-import re
+import os
 
 # ============================================
 # CONFIGURACIÓN
 # ============================================
-TOKEN = '8950143739:AAHGT40j-l9prBUlcUTF0h1V9287CV4EPQU'
-WEBHOOK_URL = 'https://script.google.com/macros/s/AKfycbx5SuiE6FXUL8a106IpIKzTa61lge-Ca0ji1216M-xT3NyHGa-AwyPqd5H5T6G0cAy9/exec'
+TOKEN = os.environ.get('TOKEN', 'AQUI_VA_TU_TOKEN_DE_TELEGRAM')
+WEBHOOK_URL = os.environ.get('WEBHOOK_URL', 'AQUI_VA_LA_URL_DE_APPS_SCRIPT')
+SPREADSHEET_ID = os.environ.get('SPREADSHEET_ID', 'AQUI_VA_EL_ID_DE_TU_HOJA')
 
 # Categorías
 CATEGORIAS = [
@@ -41,9 +42,8 @@ def obtener_datos_hoja():
         if response.status_code != 200:
             return None
             
-        # Parsear el JSON de Google
         texto = response.text
-        json_str = texto[47:-2]  # Quitar prefijo y sufijo de Google
+        json_str = texto[47:-2]
         data = json.loads(json_str)
         
         return data['table']['rows']
@@ -54,10 +54,9 @@ def obtener_datos_hoja():
 
 def procesar_datos_para_dashboard(rows):
     """Procesa los datos para el mini dashboard"""
-    if not rows or len(rows) < 2:  # Si solo tiene headers
+    if not rows or len(rows) < 2:
         return None
     
-    # Saltar la primera fila (headers)
     datos = rows[1:]
     
     total = len(datos)
@@ -72,20 +71,16 @@ def procesar_datos_para_dashboard(rows):
     for row in datos:
         cols = row.get('c', [])
         
-        # Extraer valores
         timestamp_str = cols[0].get('v', '') if len(cols) > 0 else ''
         categoria = cols[1].get('v', 'Sin Clasificar') if len(cols) > 1 else 'Sin Clasificar'
         mensaje = cols[3].get('v', '') if len(cols) > 3 else ''
         señalamiento = cols[7].get('v', False) if len(cols) > 7 else False
         
-        # Contar señalamientos
         if señalamiento == True or señalamiento == 'TRUE':
             señalamientos += 1
         
-        # Contar por categoría
         categorias[categoria] = categorias.get(categoria, 0) + 1
         
-        # Contar última hora
         if timestamp_str:
             try:
                 fecha = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
@@ -94,7 +89,6 @@ def procesar_datos_para_dashboard(rows):
             except:
                 pass
         
-        # Guardar últimos 10 mensajes
         if len(ultimos_10) < 10:
             ultimos_10.append({
                 'mensaje': mensaje[:50] + '...' if len(mensaje) > 50 else mensaje,
@@ -111,14 +105,28 @@ def procesar_datos_para_dashboard(rows):
     }
 
 # ============================================
-# COMANDO: MINI DASHBOARD
+# COMANDOS
 # ============================================
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "🤖 *Bitácora Bot v2*\n\n"
+        "📝 *Cómo funciona:*\n"
+        "1. Envía un mensaje\n"
+        "2. Elige la categoría en el menú\n"
+        "3. Se guardará automáticamente\n\n"
+        "⌛ Si no eliges en 5 min, se guarda como 'Sin Clasificar'\n\n"
+        "📊 *Comandos:*\n"
+        "/stats - Mini dashboard\n"
+        "/graficos - Gráficos ASCII\n"
+        "/dashboard - Dashboard completo",
+        parse_mode='Markdown'
+    )
+
 async def mini_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Muestra un resumen en Telegram"""
     mensaje_cargando = await update.message.reply_text("🔄 Cargando datos...")
     
     try:
-        # Obtener datos de la hoja
         rows = obtener_datos_hoja()
         
         if not rows:
@@ -139,26 +147,22 @@ async def mini_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         
-        # Construir mensaje
         mensaje = "📊 *BITÁCORA - DASHBOARD RESUMEN*\n\n"
         mensaje += f"📝 *Total registros:* {stats['total']}\n"
         mensaje += f"⚠️ *Señalamientos:* {stats['señalamientos']}\n"
         mensaje += f"🕐 *Últimas 24h:* {stats['ultima_hora']}\n\n"
         
         mensaje += "*📂 Por categoría:*\n"
-        # Ordenar categorías por cantidad (descendente)
         categorias_ordenadas = sorted(stats['categorias'].items(), key=lambda x: x[1], reverse=True)
         for cat, count in categorias_ordenadas:
-            # Buscar emoji
             emoji = '📌'
             for c, e in CATEGORIAS:
                 if c == cat:
                     emoji = e
                     break
-            barra = '█' * min(count, 20)  # Barra visual
+            barra = '█' * min(count, 20)
             mensaje += f"{emoji} {cat}: {count} {barra}\n"
         
-        # Últimos mensajes
         if stats['ultimos_10']:
             mensaje += "\n*📨 Últimos mensajes:*\n"
             for i, msg in enumerate(stats['ultimos_10'][:5], 1):
@@ -171,13 +175,8 @@ async def mini_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     except Exception as e:
         logging.error(f"Error en dashboard: {e}")
-        await mensaje_cargando.edit_text(
-            f"❌ Error cargando dashboard: {str(e)}"
-        )
+        await mensaje_cargando.edit_text(f"❌ Error cargando dashboard: {str(e)}")
 
-# ============================================
-# COMANDO: DASHBOARD CON GRÁFICOS (ASCII)
-# ============================================
 async def dashboard_grafico(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Muestra dashboard con gráficos de barras ASCII"""
     mensaje_cargando = await update.message.reply_text("🔄 Generando gráficos...")
@@ -195,18 +194,15 @@ async def dashboard_grafico(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await mensaje_cargando.edit_text("📊 No hay registros aún.")
             return
         
-        # Encontrar el máximo para escala
         max_count = max(stats['categorias'].values()) if stats['categorias'] else 1
         escala = 20 / max_count if max_count > 0 else 1
         
         mensaje = "📊 *GRÁFICO DE CATEGORÍAS*\n"
         mensaje += "═" * 30 + "\n\n"
         
-        # Ordenar por cantidad
         categorias_ordenadas = sorted(stats['categorias'].items(), key=lambda x: x[1], reverse=True)
         
         for cat, count in categorias_ordenadas:
-            # Buscar emoji
             emoji = '📌'
             for c, e in CATEGORIAS:
                 if c == cat:
@@ -215,11 +211,10 @@ async def dashboard_grafico(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             barras = '█' * int(count * escala)
             if count > 0 and int(count * escala) == 0:
-                barras = '▏'  # Barra pequeña
+                barras = '▏'
             
             mensaje += f"{emoji} {cat[:15]:<15} | {barras} {count}\n"
         
-        # Estadísticas adicionales
         mensaje += "\n" + "═" * 30 + "\n"
         mensaje += f"📝 Total: {stats['total']}  "
         mensaje += f"⚠️ Señales: {stats['señalamientos']}  "
@@ -230,14 +225,9 @@ async def dashboard_grafico(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await mensaje_cargando.edit_text(f"❌ Error: {e}")
 
-# ============================================
-# COMANDO: DASHBOARD COMPLETO (URL)
-# ============================================
 async def dashboard_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Muestra la URL del dashboard HTML"""
-    # URL de tu dashboard (reemplazar con la tuya)
     url_dashboard = f"https://tu-usuario.github.io/bitacora/dashboard.html"
-    # O si usas Google Sheets publicada
     url_sheets = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}"
     
     keyboard = [
@@ -266,44 +256,13 @@ async def dashboard_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # ============================================
-# HANDLER PARA CALLBACKS DEL DASHBOARD
-# ============================================
-async def dashboard_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Maneja los botones del dashboard"""
-    query = update.callback_query
-    await query.answer()
-    
-    if query.data == "mini_dashboard":
-        # Simular comando /stats
-        await mini_dashboard(update, context)
-    elif query.data == "graficos":
-        # Simular comando /graficos
-        await dashboard_grafico(update, context)
-
-# ============================================
 # FUNCIONES PRINCIPALES DEL BOT
 # ============================================
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🤖 *Bitácora Bot v2*\n\n"
-        "📝 *Cómo funciona:*\n"
-        "1. Envía un mensaje\n"
-        "2. Elige la categoría en el menú\n"
-        "3. Se guardará automáticamente\n\n"
-        "⌛ Si no eliges en 5 min, se guarda como 'Sin Clasificar'\n\n"
-        "📊 *Comandos:*\n"
-        "/stats - Mini dashboard\n"
-        "/graficos - Gráficos ASCII\n"
-        "/dashboard - Dashboard completo",
-        parse_mode='Markdown'
-    )
-
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     mensaje = update.message.text
     user_id = update.message.from_user.id
     username = update.message.from_user.username or update.message.from_user.first_name
     
-    # Crear teclado con categorías
     keyboard = []
     for categoria, emoji in CATEGORIAS:
         keyboard.append([InlineKeyboardButton(
@@ -318,7 +277,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    # Guardar mensaje temporalmente
     mensajes_pendientes[user_id] = {
         'texto': mensaje,
         'username': username,
@@ -333,7 +291,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='Markdown'
     )
     
-    # Timeout de 5 minutos
     context.job_queue.run_once(
         timeout_registro,
         300,
@@ -347,7 +304,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     data = query.data
     
-    # Verificar si es callback del dashboard
     if data in ["mini_dashboard", "graficos"]:
         if data == "mini_dashboard":
             await mini_dashboard(update, context)
@@ -355,7 +311,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await dashboard_grafico(update, context)
         return
     
-    # Procesar selección de categoría
     parts = data.split('_')
     if len(parts) < 3:
         await query.edit_message_text("Error en la selección.")
@@ -381,12 +336,14 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         
         if resultado:
-            del mensajes_pendientes[user_id]
+            if user_id in mensajes_pendientes:
+                del mensajes_pendientes[user_id]
             
-            job_name = f"timeout_{user_id}"
-            current_jobs = context.job_queue.get_jobs_by_name(job_name)
-            for job in current_jobs:
-                job.schedule_removal()
+            if context.job_queue:
+                job_name = f"timeout_{user_id}"
+                current_jobs = context.job_queue.get_jobs_by_name(job_name)
+                for job in current_jobs:
+                    job.schedule_removal()
             
             await query.edit_message_text(
                 f"✅ *Registrado correctamente!*\n\n"
@@ -416,7 +373,8 @@ async def timeout_registro(context: ContextTypes.DEFAULT_TYPE):
                 'Sin Clasificar'
             )
             
-            del mensajes_pendientes[user_id]
+            if user_id in mensajes_pendientes:
+                del mensajes_pendientes[user_id]
             
             await context.bot.send_message(
                 chat_id=chat_id,
@@ -456,7 +414,6 @@ async def registrar_en_hoja(mensaje, username, categoria):
 def main():
     app = Application.builder().token(TOKEN).build()
     
-    # Handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("stats", mini_dashboard))
     app.add_handler(CommandHandler("graficos", dashboard_grafico))
