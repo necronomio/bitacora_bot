@@ -4,15 +4,22 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 import requests
 import json
 from datetime import datetime, timedelta
-import asyncio
 import os
 
 # ============================================
-# CONFIGURACIÓN
+# CONFIGURACIÓN - Variables de entorno
 # ============================================
-TOKEN = os.environ.get('TOKEN', 'AQUI_VA_TU_TOKEN_DE_TELEGRAM')
-WEBHOOK_URL = os.environ.get('WEBHOOK_URL', 'AQUI_VA_LA_URL_DE_APPS_SCRIPT')
-SPREADSHEET_ID = os.environ.get('SPREADSHEET_ID', 'AQUI_VA_EL_ID_DE_TU_HOJA')
+TOKEN = os.environ.get('TOKEN')
+WEBHOOK_URL = os.environ.get('WEBHOOK_URL')
+SPREADSHEET_ID = os.environ.get('SPREADSHEET_ID')
+
+# Validar configuración
+if not TOKEN:
+    raise ValueError("❌ TOKEN no configurado en variables de entorno")
+if not WEBHOOK_URL:
+    raise ValueError("❌ WEBHOOK_URL no configurado en variables de entorno")
+if not SPREADSHEET_ID:
+    raise ValueError("❌ SPREADSHEET_ID no configurado en variables de entorno")
 
 # Categorías
 CATEGORIAS = [
@@ -28,7 +35,11 @@ CATEGORIAS = [
 # Diccionario para mensajes pendientes
 mensajes_pendientes = {}
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # ============================================
 # FUNCIÓN PARA OBTENER DATOS DE LA HOJA
@@ -40,16 +51,21 @@ def obtener_datos_hoja():
         response = requests.get(url, timeout=10)
         
         if response.status_code != 200:
+            logger.error(f"Error HTTP: {response.status_code}")
             return None
             
         texto = response.text
-        json_str = texto[47:-2]
-        data = json.loads(json_str)
+        # Parsear el JSON de Google
+        if texto.startswith('/*O_o*/'):
+            texto = texto[7:]
+        if texto.startswith('google.visualization.Query.setResponse('):
+            texto = texto[40:-2]
         
+        data = json.loads(texto)
         return data['table']['rows']
         
     except Exception as e:
-        logging.error(f"Error obteniendo datos: {e}")
+        logger.error(f"Error obteniendo datos: {e}")
         return None
 
 def procesar_datos_para_dashboard(rows):
@@ -105,7 +121,7 @@ def procesar_datos_para_dashboard(rows):
     }
 
 # ============================================
-# COMANDOS
+# COMANDOS DEL BOT
 # ============================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -118,7 +134,33 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📊 *Comandos:*\n"
         "/stats - Mini dashboard\n"
         "/graficos - Gráficos ASCII\n"
-        "/dashboard - Dashboard completo",
+        "/dashboard - Dashboard completo\n"
+        "/ayuda - Más información",
+        parse_mode='Markdown'
+    )
+
+async def ayuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "📖 *Ayuda - Bitácora Bot*\n\n"
+        "🔹 *Enviar mensaje:*\n"
+        "Escribe cualquier texto y elige la categoría\n\n"
+        "🔹 *Categorías disponibles:*\n"
+        "🔫 Operaciones\n"
+        "📋 Reunion de Informacion\n"
+        "🕵️ Contrainteligencia\n"
+        "👤 Personal/administracion\n"
+        "🔍 Analisis Criminal\n"
+        "🏛️ DDIC Moron\n"
+        "📢 Informacion General\n\n"
+        "🔹 *Señalamientos:*\n"
+        "Se marcan automáticamente con palabras clave\n"
+        "(urgente, crítico, importante, alerta, cuidado)\n\n"
+        "🔹 *Dashboard:*\n"
+        "/stats - Resumen rápido\n"
+        "/graficos - Gráficos ASCII\n"
+        "/dashboard - Dashboard completo\n\n"
+        "🔹 *Edición manual:*\n"
+        "Puedes editar cualquier registro en Google Sheets",
         parse_mode='Markdown'
     )
 
@@ -147,7 +189,8 @@ async def mini_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         
-        mensaje = "📊 *BITÁCORA - DASHBOARD RESUMEN*\n\n"
+        mensaje = "📊 *BITÁCORA - DASHBOARD RESUMEN*\n"
+        mensaje += "═" * 30 + "\n\n"
         mensaje += f"📝 *Total registros:* {stats['total']}\n"
         mensaje += f"⚠️ *Señalamientos:* {stats['señalamientos']}\n"
         mensaje += f"🕐 *Últimas 24h:* {stats['ultima_hora']}\n\n"
@@ -161,7 +204,8 @@ async def mini_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     emoji = e
                     break
             barra = '█' * min(count, 20)
-            mensaje += f"{emoji} {cat}: {count} {barra}\n"
+            porcentaje = int((count / stats['total']) * 100)
+            mensaje += f"{emoji} {cat}: {count} ({porcentaje}%)\n"
         
         if stats['ultimos_10']:
             mensaje += "\n*📨 Últimos mensajes:*\n"
@@ -169,13 +213,14 @@ async def mini_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 señal = '⚠️ ' if msg['señalamiento'] else ''
                 mensaje += f"{i}. {señal}{msg['mensaje']}\n"
         
-        mensaje += "\n📊 *Dashboard completo:* /dashboard"
+        mensaje += "\n" + "═" * 30 + "\n"
+        mensaje += "📊 *Dashboard completo:* /dashboard"
         
         await mensaje_cargando.edit_text(mensaje, parse_mode='Markdown')
         
     except Exception as e:
-        logging.error(f"Error en dashboard: {e}")
-        await mensaje_cargando.edit_text(f"❌ Error cargando dashboard: {str(e)}")
+        logger.error(f"Error en dashboard: {e}")
+        await mensaje_cargando.edit_text(f"❌ Error: {str(e)}")
 
 async def dashboard_grafico(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Muestra dashboard con gráficos de barras ASCII"""
@@ -223,11 +268,13 @@ async def dashboard_grafico(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await mensaje_cargando.edit_text(mensaje, parse_mode='Markdown')
         
     except Exception as e:
+        logger.error(f"Error en gráficos: {e}")
         await mensaje_cargando.edit_text(f"❌ Error: {e}")
 
 async def dashboard_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Muestra la URL del dashboard HTML"""
-    url_dashboard = f"https://tu-usuario.github.io/bitacora/dashboard.html"
+    # Usar URLs de tu proyecto
+    url_dashboard = os.environ.get('DASHBOARD_URL', 'https://tu-usuario.github.io/dashboard.html')
     url_sheets = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}"
     
     keyboard = [
@@ -256,7 +303,7 @@ async def dashboard_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # ============================================
-# FUNCIONES PRINCIPALES DEL BOT
+# MANEJO DE MENSAJES
 # ============================================
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     mensaje = update.message.text
@@ -271,7 +318,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )])
     
     keyboard.append([InlineKeyboardButton(
-        "⏭️ Sin Clasificar (guardar igual)",
+        "⏭️ Sin Clasificar",
         callback_data=f"cat_Sin Clasificar_{user_id}"
     )])
     
@@ -291,6 +338,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='Markdown'
     )
     
+    # Timeout de 5 minutos
     context.job_queue.run_once(
         timeout_registro,
         300,
@@ -304,6 +352,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     data = query.data
     
+    # Callbacks del dashboard
     if data in ["mini_dashboard", "graficos"]:
         if data == "mini_dashboard":
             await mini_dashboard(update, context)
@@ -311,6 +360,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await dashboard_grafico(update, context)
         return
     
+    # Callbacks de categoría
     parts = data.split('_')
     if len(parts) < 3:
         await query.edit_message_text("Error en la selección.")
@@ -339,6 +389,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if user_id in mensajes_pendientes:
                 del mensajes_pendientes[user_id]
             
+            # Cancelar timeout
             if context.job_queue:
                 job_name = f"timeout_{user_id}"
                 current_jobs = context.job_queue.get_jobs_by_name(job_name)
@@ -356,7 +407,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("❌ Error al registrar. Intenta nuevamente.")
             
     except Exception as e:
-        logging.error(f"Error: {e}")
+        logger.error(f"Error en callback: {e}")
         await query.edit_message_text(f"❌ Error: {str(e)}")
 
 async def timeout_registro(context: ContextTypes.DEFAULT_TYPE):
@@ -379,11 +430,12 @@ async def timeout_registro(context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(
                 chat_id=chat_id,
                 text="⏰ *Tiempo agotado!*\n\n"
-                     "El mensaje se registró automáticamente como 'Sin Clasificar'.",
+                     "El mensaje se registró automáticamente como 'Sin Clasificar'.\n"
+                     "Puedes editarlo manualmente en la hoja.",
                 parse_mode='Markdown'
             )
         except Exception as e:
-            logging.error(f"Error en timeout: {e}")
+            logger.error(f"Error en timeout: {e}")
 
 async def registrar_en_hoja(mensaje, username, categoria):
     try:
@@ -405,25 +457,39 @@ async def registrar_en_hoja(mensaje, username, categoria):
         return response.status_code == 200
         
     except Exception as e:
-        logging.error(f"Error registrando: {e}")
+        logger.error(f"Error registrando: {e}")
         return False
 
 # ============================================
 # MAIN
 # ============================================
 def main():
-    app = Application.builder().token(TOKEN).build()
-    
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("stats", mini_dashboard))
-    app.add_handler(CommandHandler("graficos", dashboard_grafico))
-    app.add_handler(CommandHandler("dashboard", dashboard_url))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    app.add_handler(CallbackQueryHandler(handle_callback))
-    
-    print("🤖 Bot v2 iniciado con dashboard integrado...")
-    print("📊 Comandos disponibles: /stats /graficos /dashboard")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    """Punto de entrada principal"""
+    try:
+        # Crear la aplicación
+        app = Application.builder().token(TOKEN).build()
+        
+        # Agregar handlers
+        app.add_handler(CommandHandler("start", start))
+        app.add_handler(CommandHandler("ayuda", ayuda))
+        app.add_handler(CommandHandler("stats", mini_dashboard))
+        app.add_handler(CommandHandler("graficos", dashboard_grafico))
+        app.add_handler(CommandHandler("dashboard", dashboard_url))
+        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+        app.add_handler(CallbackQueryHandler(handle_callback))
+        
+        logger.info("🤖 Bitácora Bot iniciado correctamente")
+        logger.info("📊 Comandos disponibles: /stats /graficos /dashboard /ayuda")
+        
+        # Iniciar el bot
+        app.run_polling(
+            allowed_updates=Update.ALL_TYPES,
+            drop_pending_updates=True
+        )
+        
+    except Exception as e:
+        logger.error(f"Error al iniciar el bot: {e}")
+        raise
 
 if __name__ == '__main__':
     main()
