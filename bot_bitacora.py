@@ -5,21 +5,24 @@ import requests
 import json
 from datetime import datetime, timedelta
 import os
+import sys
 
 # ============================================
-# CONFIGURACIÓN - Variables de entorno
+# CONFIGURACIÓN
 # ============================================
 TOKEN = os.environ.get('TOKEN')
 WEBHOOK_URL = os.environ.get('WEBHOOK_URL')
 SPREADSHEET_ID = os.environ.get('SPREADSHEET_ID')
 
-# Validar configuración
 if not TOKEN:
-    raise ValueError("❌ TOKEN no configurado en variables de entorno")
+    print("❌ ERROR: TOKEN no configurado")
+    sys.exit(1)
 if not WEBHOOK_URL:
-    raise ValueError("❌ WEBHOOK_URL no configurado en variables de entorno")
+    print("❌ ERROR: WEBHOOK_URL no configurado")
+    sys.exit(1)
 if not SPREADSHEET_ID:
-    raise ValueError("❌ SPREADSHEET_ID no configurado en variables de entorno")
+    print("❌ ERROR: SPREADSHEET_ID no configurado")
+    sys.exit(1)
 
 # Categorías
 CATEGORIAS = [
@@ -42,51 +45,39 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ============================================
-# FUNCIÓN PARA OBTENER DATOS DE LA HOJA
+# FUNCIONES DEL DASHBOARD
 # ============================================
 def obtener_datos_hoja():
-    """Obtiene datos de la hoja para el dashboard"""
     try:
         url = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:json"
         response = requests.get(url, timeout=10)
-        
         if response.status_code != 200:
-            logger.error(f"Error HTTP: {response.status_code}")
             return None
-            
         texto = response.text
-        # Parsear el JSON de Google
         if texto.startswith('/*O_o*/'):
             texto = texto[7:]
         if texto.startswith('google.visualization.Query.setResponse('):
             texto = texto[40:-2]
-        
         data = json.loads(texto)
         return data['table']['rows']
-        
     except Exception as e:
         logger.error(f"Error obteniendo datos: {e}")
         return None
 
 def procesar_datos_para_dashboard(rows):
-    """Procesa los datos para el mini dashboard"""
     if not rows or len(rows) < 2:
         return None
-    
     datos = rows[1:]
-    
     total = len(datos)
     señalamientos = 0
     categorias = {}
     ultima_hora = 0
     ultimos_10 = []
-    
     ahora = datetime.now()
     hace_24h = ahora - timedelta(hours=24)
     
     for row in datos:
         cols = row.get('c', [])
-        
         timestamp_str = cols[0].get('v', '') if len(cols) > 0 else ''
         categoria = cols[1].get('v', 'Sin Clasificar') if len(cols) > 1 else 'Sin Clasificar'
         mensaje = cols[3].get('v', '') if len(cols) > 3 else ''
@@ -94,7 +85,6 @@ def procesar_datos_para_dashboard(rows):
         
         if señalamiento == True or señalamiento == 'TRUE':
             señalamientos += 1
-        
         categorias[categoria] = categorias.get(categoria, 0) + 1
         
         if timestamp_str:
@@ -134,59 +124,20 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📊 *Comandos:*\n"
         "/stats - Mini dashboard\n"
         "/graficos - Gráficos ASCII\n"
-        "/dashboard - Dashboard completo\n"
-        "/ayuda - Más información",
-        parse_mode='Markdown'
-    )
-
-async def ayuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "📖 *Ayuda - Bitácora Bot*\n\n"
-        "🔹 *Enviar mensaje:*\n"
-        "Escribe cualquier texto y elige la categoría\n\n"
-        "🔹 *Categorías disponibles:*\n"
-        "🔫 Operaciones\n"
-        "📋 Reunion de Informacion\n"
-        "🕵️ Contrainteligencia\n"
-        "👤 Personal/administracion\n"
-        "🔍 Analisis Criminal\n"
-        "🏛️ DDIC Moron\n"
-        "📢 Informacion General\n\n"
-        "🔹 *Señalamientos:*\n"
-        "Se marcan automáticamente con palabras clave\n"
-        "(urgente, crítico, importante, alerta, cuidado)\n\n"
-        "🔹 *Dashboard:*\n"
-        "/stats - Resumen rápido\n"
-        "/graficos - Gráficos ASCII\n"
-        "/dashboard - Dashboard completo\n\n"
-        "🔹 *Edición manual:*\n"
-        "Puedes editar cualquier registro en Google Sheets",
+        "/dashboard - Dashboard completo",
         parse_mode='Markdown'
     )
 
 async def mini_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Muestra un resumen en Telegram"""
     mensaje_cargando = await update.message.reply_text("🔄 Cargando datos...")
-    
     try:
         rows = obtener_datos_hoja()
-        
         if not rows:
-            await mensaje_cargando.edit_text(
-                "❌ No se pudo obtener datos de la hoja.\n"
-                "Verifica que el ID de la hoja sea correcto."
-            )
+            await mensaje_cargando.edit_text("❌ No se pudo obtener datos.")
             return
-        
         stats = procesar_datos_para_dashboard(rows)
-        
         if not stats or stats['total'] == 0:
-            await mensaje_cargando.edit_text(
-                "📊 *Dashboard - Bitácora*\n\n"
-                "No hay registros aún.\n"
-                "Envía un mensaje para comenzar.",
-                parse_mode='Markdown'
-            )
+            await mensaje_cargando.edit_text("📊 No hay registros aún.")
             return
         
         mensaje = "📊 *BITÁCORA - DASHBOARD RESUMEN*\n"
@@ -194,8 +145,8 @@ async def mini_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mensaje += f"📝 *Total registros:* {stats['total']}\n"
         mensaje += f"⚠️ *Señalamientos:* {stats['señalamientos']}\n"
         mensaje += f"🕐 *Últimas 24h:* {stats['ultima_hora']}\n\n"
-        
         mensaje += "*📂 Por categoría:*\n"
+        
         categorias_ordenadas = sorted(stats['categorias'].items(), key=lambda x: x[1], reverse=True)
         for cat, count in categorias_ordenadas:
             emoji = '📌'
@@ -203,7 +154,6 @@ async def mini_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if c == cat:
                     emoji = e
                     break
-            barra = '█' * min(count, 20)
             porcentaje = int((count / stats['total']) * 100)
             mensaje += f"{emoji} {cat}: {count} ({porcentaje}%)\n"
         
@@ -213,28 +163,20 @@ async def mini_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 señal = '⚠️ ' if msg['señalamiento'] else ''
                 mensaje += f"{i}. {señal}{msg['mensaje']}\n"
         
-        mensaje += "\n" + "═" * 30 + "\n"
-        mensaje += "📊 *Dashboard completo:* /dashboard"
-        
+        mensaje += "\n📊 *Dashboard completo:* /dashboard"
         await mensaje_cargando.edit_text(mensaje, parse_mode='Markdown')
-        
     except Exception as e:
-        logger.error(f"Error en dashboard: {e}")
+        logger.error(f"Error: {e}")
         await mensaje_cargando.edit_text(f"❌ Error: {str(e)}")
 
 async def dashboard_grafico(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Muestra dashboard con gráficos de barras ASCII"""
     mensaje_cargando = await update.message.reply_text("🔄 Generando gráficos...")
-    
     try:
         rows = obtener_datos_hoja()
-        
         if not rows:
             await mensaje_cargando.edit_text("❌ Error obteniendo datos")
             return
-        
         stats = procesar_datos_para_dashboard(rows)
-        
         if not stats or stats['total'] == 0:
             await mensaje_cargando.edit_text("📊 No hay registros aún.")
             return
@@ -246,18 +188,15 @@ async def dashboard_grafico(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mensaje += "═" * 30 + "\n\n"
         
         categorias_ordenadas = sorted(stats['categorias'].items(), key=lambda x: x[1], reverse=True)
-        
         for cat, count in categorias_ordenadas:
             emoji = '📌'
             for c, e in CATEGORIAS:
                 if c == cat:
                     emoji = e
                     break
-            
             barras = '█' * int(count * escala)
             if count > 0 and int(count * escala) == 0:
                 barras = '▏'
-            
             mensaje += f"{emoji} {cat[:15]:<15} | {barras} {count}\n"
         
         mensaje += "\n" + "═" * 30 + "\n"
@@ -266,38 +205,19 @@ async def dashboard_grafico(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mensaje += f"🕐 24h: {stats['ultima_hora']}"
         
         await mensaje_cargando.edit_text(mensaje, parse_mode='Markdown')
-        
     except Exception as e:
-        logger.error(f"Error en gráficos: {e}")
         await mensaje_cargando.edit_text(f"❌ Error: {e}")
 
 async def dashboard_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Muestra la URL del dashboard HTML"""
-    # Usar URLs de tu proyecto
-    url_dashboard = os.environ.get('DASHBOARD_URL', 'https://tu-usuario.github.io/dashboard.html')
     url_sheets = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}"
-    
     keyboard = [
-        [
-            InlineKeyboardButton("📊 Dashboard HTML", url=url_dashboard),
-            InlineKeyboardButton("📝 Hoja de Cálculo", url=url_sheets)
-        ],
-        [
-            InlineKeyboardButton("📈 Mini Dashboard", callback_data="mini_dashboard"),
-            InlineKeyboardButton("📊 Gráficos", callback_data="graficos")
-        ]
+        [InlineKeyboardButton("📝 Hoja de Cálculo", url=url_sheets)],
+        [InlineKeyboardButton("📈 Mini Dashboard", callback_data="mini_dashboard")],
+        [InlineKeyboardButton("📊 Gráficos", callback_data="graficos")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    
     await update.message.reply_text(
-        "📊 *DASHBOARD BITÁCORA*\n\n"
-        "Elige cómo quieres ver los datos:\n\n"
-        "🔗 *Links externos:*\n"
-        "• HTML Dashboard (interactivo)\n"
-        "• Hoja de cálculo (editable)\n\n"
-        "🤖 *En Telegram:*\n"
-        "• Mini Dashboard (resumen)\n"
-        "• Gráficos ASCII",
+        "📊 *DASHBOARD BITÁCORA*\n\nElige cómo ver los datos:",
         reply_markup=reply_markup,
         parse_mode='Markdown'
     )
@@ -316,12 +236,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"{emoji} {categoria}", 
             callback_data=f"cat_{categoria}_{user_id}"
         )])
-    
     keyboard.append([InlineKeyboardButton(
         "⏭️ Sin Clasificar",
         callback_data=f"cat_Sin Clasificar_{user_id}"
     )])
-    
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     mensajes_pendientes[user_id] = {
@@ -332,13 +250,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
     
     await update.message.reply_text(
-        f"📨 *Mensaje recibido:*\n\n\"{mensaje}\"\n\n"
-        "👇 *Elige la categoría:*",
+        f"📨 *Mensaje:*\n\"{mensaje}\"\n\n👇 *Elige categoría:*",
         reply_markup=reply_markup,
         parse_mode='Markdown'
     )
     
-    # Timeout de 5 minutos
     context.job_queue.run_once(
         timeout_registro,
         300,
@@ -349,10 +265,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    
     data = query.data
     
-    # Callbacks del dashboard
     if data in ["mini_dashboard", "graficos"]:
         if data == "mini_dashboard":
             await mini_dashboard(update, context)
@@ -360,7 +274,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await dashboard_grafico(update, context)
         return
     
-    # Callbacks de categoría
     parts = data.split('_')
     if len(parts) < 3:
         await query.edit_message_text("Error en la selección.")
@@ -379,35 +292,30 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     try:
-        resultado = await registrar_en_hoja(
-            mensaje_data['texto'],
-            mensaje_data['username'],
-            categoria
-        )
+        payload = {
+            'message': {
+                'text': mensaje_data['texto'],
+                'from': {'username': mensaje_data['username']}
+            },
+            'categoria_manual': categoria
+        }
+        response = requests.post(WEBHOOK_URL, json=payload, timeout=10)
         
-        if resultado:
+        if response.status_code == 200:
             if user_id in mensajes_pendientes:
                 del mensajes_pendientes[user_id]
-            
-            # Cancelar timeout
             if context.job_queue:
                 job_name = f"timeout_{user_id}"
-                current_jobs = context.job_queue.get_jobs_by_name(job_name)
-                for job in current_jobs:
+                for job in context.job_queue.get_jobs_by_name(job_name):
                     job.schedule_removal()
-            
             await query.edit_message_text(
-                f"✅ *Registrado correctamente!*\n\n"
-                f"📝 Mensaje: \"{mensaje_data['texto']}\"\n"
-                f"📂 Categoría: {categoria}\n\n"
-                f"📊 Usa /stats para ver el dashboard.",
+                f"✅ *Registrado!*\n📂 {categoria}",
                 parse_mode='Markdown'
             )
         else:
-            await query.edit_message_text("❌ Error al registrar. Intenta nuevamente.")
-            
+            await query.edit_message_text("❌ Error al registrar.")
     except Exception as e:
-        logger.error(f"Error en callback: {e}")
+        logger.error(f"Error: {e}")
         await query.edit_message_text(f"❌ Error: {str(e)}")
 
 async def timeout_registro(context: ContextTypes.DEFAULT_TYPE):
@@ -418,60 +326,30 @@ async def timeout_registro(context: ContextTypes.DEFAULT_TYPE):
     mensaje_data = mensajes_pendientes.get(user_id)
     if mensaje_data:
         try:
-            await registrar_en_hoja(
-                mensaje_data['texto'],
-                mensaje_data['username'],
-                'Sin Clasificar'
-            )
-            
+            payload = {
+                'message': {
+                    'text': mensaje_data['texto'],
+                    'from': {'username': mensaje_data['username']}
+                },
+                'categoria_manual': 'Sin Clasificar'
+            }
+            requests.post(WEBHOOK_URL, json=payload, timeout=10)
             if user_id in mensajes_pendientes:
                 del mensajes_pendientes[user_id]
-            
             await context.bot.send_message(
                 chat_id=chat_id,
-                text="⏰ *Tiempo agotado!*\n\n"
-                     "El mensaje se registró automáticamente como 'Sin Clasificar'.\n"
-                     "Puedes editarlo manualmente en la hoja.",
-                parse_mode='Markdown'
+                text="⏰ Tiempo agotado. Registrado como 'Sin Clasificar'."
             )
         except Exception as e:
             logger.error(f"Error en timeout: {e}")
-
-async def registrar_en_hoja(mensaje, username, categoria):
-    try:
-        payload = {
-            'message': {
-                'text': mensaje,
-                'from': {'username': username}
-            },
-            'categoria_manual': categoria
-        }
-        
-        response = requests.post(
-            WEBHOOK_URL,
-            json=payload,
-            headers={'Content-Type': 'application/json'},
-            timeout=10
-        )
-        
-        return response.status_code == 200
-        
-    except Exception as e:
-        logger.error(f"Error registrando: {e}")
-        return False
 
 # ============================================
 # MAIN
 # ============================================
 def main():
-    """Punto de entrada principal"""
     try:
-        # Crear la aplicación
         app = Application.builder().token(TOKEN).build()
-        
-        # Agregar handlers
         app.add_handler(CommandHandler("start", start))
-        app.add_handler(CommandHandler("ayuda", ayuda))
         app.add_handler(CommandHandler("stats", mini_dashboard))
         app.add_handler(CommandHandler("graficos", dashboard_grafico))
         app.add_handler(CommandHandler("dashboard", dashboard_url))
@@ -479,16 +357,10 @@ def main():
         app.add_handler(CallbackQueryHandler(handle_callback))
         
         logger.info("🤖 Bitácora Bot iniciado correctamente")
-        logger.info("📊 Comandos disponibles: /stats /graficos /dashboard /ayuda")
-        
-        # Iniciar el bot
-        app.run_polling(
-            allowed_updates=Update.ALL_TYPES,
-            drop_pending_updates=True
-        )
-        
+        logger.info("📊 Comandos: /stats /graficos /dashboard")
+        app.run_polling(allowed_updates=Update.ALL_TYPES)
     except Exception as e:
-        logger.error(f"Error al iniciar el bot: {e}")
+        logger.error(f"Error: {e}")
         raise
 
 if __name__ == '__main__':
